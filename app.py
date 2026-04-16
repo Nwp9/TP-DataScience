@@ -1,3 +1,22 @@
+from sqlalchemy import create_engine, MetaData, Table, Column, Integer, Float, String, insert
+
+engine = create_engine("sqlite:///house_prices.db")
+metadata = MetaData()
+
+predictions = Table(
+    "predictions",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("neighborhood", String),
+    Column("gr_liv_area", Float),
+    Column("overall_qual", Integer),
+    Column("garage_cars", Integer),
+    Column("predicted_price", Float),
+)
+
+metadata.create_all(engine)
+
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 import pandas as pd
@@ -89,11 +108,6 @@ class HouseInput(BaseModel):
     SaleCondition: str
 
 # Route test
-@app.get("/")
-def home():
-    return {"message": "API House Price prête"}
-
-# Route prédiction
 @app.post("/predict")
 def predict_price(house: HouseInput):
     data = house.model_dump()
@@ -105,13 +119,39 @@ def predict_price(house: HouseInput):
 
     df = pd.DataFrame([data])
 
-    # alignement exact
+    # alignement
     df = df.reindex(columns=model.feature_names_in_)
 
+    # prédiction
     pred_log = model.predict(df)[0]
     pred_price = float(np.expm1(pred_log))
+
+    # sauvegarde en base
+    conn = engine.connect()
+
+    stmt = insert(predictions).values(
+        neighborhood=data["Neighborhood"],
+        gr_liv_area=data["GrLivArea"],
+        overall_qual=data["OverallQual"],
+        garage_cars=data["GarageCars"],
+        predicted_price=pred_price
+    )
+
+    conn.execute(stmt)
+    conn.commit()
 
     return {
         "pred_log": round(float(pred_log), 4),
         "pred_price": round(pred_price, 2)
     }
+
+from sqlalchemy import select
+
+@app.get("/history")
+def get_history():
+    conn = engine.connect()
+    query = select(predictions)
+    result = conn.execute(query)
+
+    rows = [dict(row._mapping) for row in result]
+    return rows
